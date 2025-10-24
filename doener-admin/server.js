@@ -90,7 +90,13 @@ app.post('/api/auth/login', async (req, res) => {
   const ok = await bcrypt.compare(password, row.password_hash);
   if(!ok) return res.status(401).json({ error: 'Invalid credentials' });
   const token = jwt.sign({ uid: row.id, username: row.username }, JWT_SECRET, { expiresIn: '7d' });
-  res.cookie('token', token, { httpOnly: true, sameSite: 'lax', secure: isProd, maxAge: 7*24*60*60*1000 });
+  res.cookie('token', token, {
+  httpOnly: true,
+  sameSite: 'none',    // wichtig für Cross-Origin Login
+  secure: true,        // wichtig, weil SameSite=None nur mit HTTPS
+  maxAge: 7*24*60*60*1000
+});
+
   res.json({ ok: true, username: row.username });
 });
 
