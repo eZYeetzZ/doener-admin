@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Dönerladen · Admin</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body{margin:0;font-family:Inter,system-ui;background:#0e0a09;color:#f6f1ee}
+    .wrap{width:min(100% - 32px,1100px);margin:40px auto}
+    .card{background:#171110;border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:16px;box-shadow:0 10px 24px rgba(0,0,0,.3)}
+    .grid{display:grid;gap:16px}
+    .g-2{grid-template-columns:1fr 1fr}
+    @media(max-width:900px){.g-2{grid-template-columns:1fr}}
+    input,button,select{font:inherit}
+    input,select{width:100%;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.08);background:#1d1513;color:#f6f1ee}
+    button{padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.08);background:linear-gradient(90deg,#ff8a3d,#ff3d5a);color:#1d0f0b;font-weight:900;cursor:pointer}
+    .row{display:flex;gap:10px;align-items:center}
+    .stat{display:flex;flex-direction:column;gap:4px}
+    .stat .v{font-weight:800;font-size:22px}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:10px;border-bottom:1px dashed rgba(255,255,255,.08);text-align:left}
+    .right{text-align:right}
+    .header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+    .muted{color:#cbbfb9}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card" id="loginCard">
+      <h2>Admin Login</h2>
+      <div class="grid">
+        <input id="user" placeholder="Benutzername" autocomplete="username"/>
+        <input id="pass" placeholder="Passwort" type="password" autocomplete="current-password"/>
+        <button id="loginBtn">Einloggen</button>
+      </div>
+      <p class="muted" id="loginMsg"></p>
+    </div>
+
+    <div class="grid" style="margin-top:16px; display:none" id="dash">
+      <div class="header">
+        <h2>Verkaufs-Statistiken</h2>
+        <div class="row">
+          <select id="range">
+            <option value="day">Heute</option>
+            <option value="week">Woche</option>
+            <option value="month">Monat</option>
+            <option value="all">Alle</option>
+          </select>
+          <button id="logoutBtn" style="background:#1d1513;color:#f6f1ee">Logout</button>
+        </div>
+      </div>
+
+      <div class="grid g-2">
+        <div class="card stat"><span class="muted">Umsatz</span> <span class="v" id="sum">–</span></div>
+        <div class="card stat"><span class="muted">Transaktionen</span> <span class="v" id="count">–</span></div>
+      </div>
+
+      <div class="card">
+        <canvas id="chart" height="120"></canvas>
+      </div>
+
+      <div class="card">
+        <div class="header">
+          <h3>Letzte Verkäufe</h3>
+          <button id="exportBtn">CSV Export</button>
+        </div>
+        <table>
+          <thead>
+            <tr><th>Datum</th><th>Prefix</th><th>Position</th><th>Artikel</th><th class="right">Gesamt</th></tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+<script>
+const API = location.origin; // gleiche Origin
+
+function fmtMoneyCents(cents, currency='USD'){
+  return new Intl.NumberFormat(currency==='EUR'?'de-DE':'en-US', { style:'currency', currency }).format(cents/100);
+}
+
+async function login(){
+  const r = await fetch(API+'/api/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include', body: JSON.stringify({ username: user.value, password: pass.value }) });
+  const j = await r.json();
+  if(j.ok){ loginCard.style.display='none'; dash.style.display='grid'; loadAll(); } else { loginMsg.textContent = j.error || 'Login fehlgeschlagen'; }
+}
+
+async function me(){
+  const r = await fetch(API+'/api/auth/me', { credentials:'include' });
+  return r.ok;
+}
+
+async function logout(){ await fetch(API+'/api/auth/logout', { method:'POST', credentials:'include' }); location.reload(); }
+
+async function summary(range){
+  const r = await fetch(API+`/api/stats/summary?range=${range}`, { credentials:'include' });
+  return r.json();
+}
+async function timeseries(range){
+  const r = await fetch(API+`/api/stats/timeseries?range=${range}`, { credentials:'include' });
+  return r.json();
+}
+async function listSales(){
+  const r = await fetch(API+`/api/sales?limit=200`, { credentials:'include' });
+  return r.json();
+}
+
+let chart;
+async function loadAll(){
+  const range = document.getElementById('range').value;
+  const s = await summary(range);
+  document.getElementById('sum').textContent = fmtMoneyCents(s.sum_cents);
+  document.getElementById('count').textContent = s.count;
+
+  const ts = await timeseries(range);
+  const labels = ts.rows.map(r=> r.day);
+  const data = ts.rows.map(r=> r.sum_cents/100);
+  if(chart) chart.destroy();
+  const ctx = document.getElementById('chart');
+  chart = new Chart(ctx, { type:'line', data:{ labels, datasets:[{ label:'Umsatz', data }] }, options:{ responsive:true, plugins:{ legend:{ display:false } } } });
+
+  const lst = await listSales();
+  const tb = document.getElementById('rows');
+  tb.innerHTML = '';
+  lst.rows.forEach(r=>{
+    const items = JSON.parse(r.items_json).map(i=> `${i.qty}x ${i.name}`).join(', ');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${new Date(r.created_at).toLocaleString()}</td><td>${r.prefix||''}</td><td>${r.position||''}</td><td>${items}</td><td class="right">${fmtMoneyCents(r.total_cents, r.currency)}</td>`;
+    tb.appendChild(tr);
+  });
+}
+
+// CSV Export
+async function exportCSV(){
+  const lst = await listSales();
+  const header = ['id','created_at','total','currency','prefix','position','items'];
+  const lines = [header.join(',')];
+  lst.rows.forEach(r=>{
+    const items = JSON.parse(r.items_json).map(i=> `${i.qty}x ${i.name}`).join(' | ').replaceAll(',', ';');
+    lines.push([r.id, r.created_at, (r.total_cents/100).toFixed(2), r.currency, r.prefix||'', r.position||'', items].map(v=>`"${String(v).replaceAll('"','""')}"`).join(','));
+  });
+  const blob = new Blob([lines.join('\n')], { type:'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = `sales_${Date.now()}.csv`; a.click(); URL.revokeObjectURL(url);
+}
+
+// UI Hooks
+loginBtn.addEventListener('click', login);
+pass.addEventListener('keydown', (e)=> e.key==='Enter' && login());
+range.addEventListener('change', loadAll);
+logoutBtn.addEventListener('click', logout);
+exportBtn.addEventListener('click', exportCSV);
+
+// Auto-Login (falls Cookie noch gültig)
+me().then(ok => { if(ok){ loginCard.style.display='none'; dash.style.display='grid'; loadAll(); } });
+</script>
+</body>
+</html>
